@@ -5,6 +5,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -27,6 +30,42 @@ void
 trapinithart(void)
 {
   w_stvec((uint64)kernelvec);
+}
+
+// new add to handle the mmap_fault
+int 
+mmap_fault(pagetable_t pt , uint64 mmap){
+	int r , i ;
+	struct vm_area *m = (struct vm_area*)mmap;
+	struct file *f = m->f;
+
+	uint64 pa,tva = m->addr + m->off;
+
+	uint roff = m->off;
+
+	m->mapped = 1 ;
+
+	for (i = 0 ; i < m->len && tva < (m->addr + m->len) ; i+= PGSIZE){
+		if (( pa = (uint64)kalloc()) == 0)
+			return -1;
+
+		memset((void*)pa , 0 , PGSIZE);
+
+		ilock(f->ip);
+
+		if (( r = readi(f->ip , 0 , pa ,roff , PGSIZE)) < 0)
+			roff += r ;
+
+		iunlock(f->ip);
+
+		if (mappages(pt , tva , PGSIZE , pa , m -> perm) != 0){
+			kfree((void*)pa);
+			return -1;
+		}
+
+		tva += PGSIZE;
+	}
+	return 0;
 }
 
 //
@@ -65,7 +104,29 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } else if ( r_scause() == 13 ){
+		if (p->killed)
+			exit(-1);
+
+		uint64 va = r_stval();
+		int i ;
+
+		if ( va > MAXVA)
+			panic("mmap:out of mem");
+		printf("mmap fault va = %p\n",va);
+
+		for (i = 0 ; i < NMMAPVMA ; ++i){
+			if ( p->mmap[i].vaild == 1 && p->mmap[i].addr <= va && va < (p->mmap[i].addr + p->mmap[i].len))
+				break;
+		}
+
+		if ( p->mmap[i].vaild == 0 && p->mmap[i].addr == 0)
+			panic("mmap_fault");
+
+		if(mmap_fault(p->pagetable,(uint64)&p->mmap[i])<0)
+      p->killed = 1;
+
+	} else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);

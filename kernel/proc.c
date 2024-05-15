@@ -133,6 +133,12 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+	
+	for (int i = 0 ; i < NMMAPVMA; ++i){
+		p->mmap[i].vaild = 0;
+		p->mmap[i].mapped = 0;
+		p->mmap[i].addr = 0;
+	}
 
   return p;
 }
@@ -303,7 +309,12 @@ fork(void)
   np->state = RUNNABLE;
 
   release(&np->lock);
-
+	for(i = 0; i < NMMAPVMA ;i++){
+    if(p->mmap[i].vaild){
+      filedup(p->mmap[i].f);
+      np->mmap[i] = p->mmap[i];
+    }
+  }
   return pid;
 }
 
@@ -393,7 +404,9 @@ exit(int status)
   p->state = ZOMBIE;
 
   release(&original_parent->lock);
-
+	for(int i = 0;i < NMMAPVMA;i++)
+    if(p->mmap[i].vaild && p->mmap[i].mapped)
+      uvmunmap(p->pagetable,p->mmap[i].addr,p->mmap[i].len/PGSIZE,1);
   // Jump into the scheduler, never to return.
   sched();
   panic("zombie exit");
@@ -701,3 +714,4 @@ procdump(void)
     printf("\n");
   }
 }
+

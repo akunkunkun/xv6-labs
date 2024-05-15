@@ -15,7 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
-
+#include "memlayout.h"
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -484,3 +484,155 @@ sys_pipe(void)
   }
   return 0;
 }
+
+// new add 
+uint64 find_freespace(struct vm_area m[],uint64 len){
+	uint64 top = TRAPFRAME , bottom = TRAPFRAME - len;
+	for (int i = 0 ; i < NMMAPVMA ; ++i){
+		if (m[i].vaild == 0)
+			continue;
+		if (top <= ( m[i].addr + m[i].len ) || bottom <= m[i].addr){
+			top = m[i].addr ;
+			bottom = top - len;
+		}
+	}
+	return bottom;
+}
+
+uint64 
+sys_mmap(void){
+	uint64 addr , len;
+	int prot , flags , fd ,off;
+	struct file *f ;
+	
+	if (argfd(4,&fd , &f) < 0)
+		return -1;
+	
+	argaddr(0,&addr);
+	argaddr(1,&len);
+	argint(2,&prot);
+	argint(3,&flags);
+	argint(5,&off);
+
+	// if open is readonly 
+	// and mmap is MAP_SHARED and PROT_WRITE 
+	// the map is wrong
+	if (f-> writable == 0 && (prot & PROT_WRITE ) && ( flags & MAP_SHARED))
+		return -1;
+
+	struct proc *p = myproc();
+	uint64 va;
+
+	if(addr == 0){
+		struct vm_area *empty = 0 ;
+		int i ;
+		for (i = 0 ; i < NMMAPVMA ; i++){
+			if ( p-> mmap[i].vaild == 0){
+				empty = &p->mmap[i];
+				break;
+			}
+		}
+
+		if (empty == 0)
+			panic("mmap");
+
+		if ( (va = find_freespace (p->mmap,len)) == 0)
+			panic("mmap 2");
+
+		empty->vaild = 1;
+		empty->f = f ;	
+		empty->flags = flags;
+    empty->len = len;
+    empty->off = off;
+    empty->perm = prot << 1 | PTE_U;
+    empty->addr = va;
+
+    filedup(empty->f);
+
+    return empty->addr;
+  }
+
+  return -1;
+}	
+
+uint64
+sys_munmap(void){
+  uint64 va,len;
+
+  argaddr(0,&va);
+  argaddr(1,&len);
+
+  struct proc *p = myproc();
+  struct vm_area *m = 0;
+
+  int i;
+  for(i = 0 ; i < NMMAPVMA ; i++){
+    if(p->mmap[i].vaild == 1 && p->mmap[i].addr <= va && 
+         va < p->mmap[i].addr+p->mmap[i].len){
+      m = &p->mmap[i];
+      break;
+    }
+  }
+
+  if(m == 0)
+    return -1;
+
+  if((m->len - len) <= 0){
+
+    if(m->flags&MAP_SHARED){
+      begin_op();
+      ilock(m->f->ip);
+      if(writei(m->f->ip,1,va,0,m->len) != m->len)
+        panic("writei");
+      iunlock(m->f->ip);
+      end_op();
+    }
+
+    m->f->ref--;
+    m->f->off = 0;
+    uvmunmap(p->pagetable,va,len/PGSIZE,1);
+
+    memset((void*)m,0,sizeof(struct vm_area));
+
+    return 0;
+  }else{
+
+    if(m->flags&MAP_SHARED){
+      begin_op();
+      ilock(m->f->ip);
+      if(writei(m->f->ip,1,va,0,len) != len)
+        panic("writei");
+      iunlock(m->f->ip);
+      end_op();
+    }
+    if(va != m->addr){
+      len = m->len - (va - m->addr);
+      uvmunmap(p->pagetable, va, len/PGSIZE, 1);
+      m->len = m->len - len;
+    }
+    else{
+      uvmunmap(p->pagetable, va, len/PGSIZE, 1);
+      m->len -= PGROUNDUP(len);
+      m->addr += PGROUNDUP(len);
+    }
+
+    return 0;
+  }
+
+  return -1;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -40,3 +40,12 @@ void free(void*);
 int atoi(const char*);
 int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
+
+// new add vma 
+typedef unsigned long int size_t ;
+typedef int off_t ;
+
+void *mmap(void* , int ,int , int ,int , off_t);
+int munmap(void* , size_t);
+
+
